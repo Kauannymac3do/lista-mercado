@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calculadora de Mercado com IA</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 15px; max-width: 500px; margin: auto; background-color: #f9f9f9; }
+    h2, h3 { color: #333; margin-bottom: 10px; }
+    .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
+    input, button { width: 100%; padding: 10px; margin-bottom: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+    button { background-color: #28a745; color: white; border: none; font-weight: bold; cursor: pointer; }
+    button.btn-danger { background-color: #dc3545; }
+    .row { display: flex; gap: 8px; }
+    .row input { flex: 1; }
+    .item { border-bottom: 1px solid #eee; padding: 10px 0; }
+    .item-topo { display: flex; justify-content: space-between; align-items: center; }
+    .item-detalhes { font-size: 13px; color: #666; margin-bottom: 5px; }
+    .item-preco-area { display: flex; gap: 5px; margin-top: 5px; }
+    .item-preco-area input { margin-bottom: 0; }
+    .item-preco-area button { width: auto; padding: 5px 12px; margin-bottom: 0; }
+    .comprado { background-color: #e8f5e9; padding: 8px; border-radius: 5px; }
+    .resumo { font-size: 18px; font-weight: bold; margin-top: 10px; }
+    .restante-ok { color: #28a745; }
+    .restante-alerta { color: #dc3545; }
+    .status-ia { font-size: 12px; color: #007bff; font-weight: bold; display: none; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Calculadora de Mercado</h2>
+    <label for="limite"><strong>Limite de Gastos (R$):</strong></label>
+    <input type="number" id="limite" placeholder="Ex: 200" onchange="atualizarTela()">
+  </div>
+
+  <div class="card">
+    <h3>Configuração da IA</h3>
+    <input type="password" id="apiKey" placeholder="Cole sua API Key do Gemini aqui" onchange="salvarKey()">
+  </div>
+
+  <div class="card">
+    <h3>1. Montar Lista (Em Casa)</h3>
+    <input type="text" id="nomeProduto" placeholder="Nome do Produto (Ex: Maçã, Detergente)">
+    
+    <div class="row">
+      <input type="number" id="qtdProduto" placeholder="Qtd" value="1" min="1">
+    </div>
+
+    <div id="statusIA" class="status-ia">Classificando produto com IA...</div>
+    <button id="btnAdicionar" onclick="adicionarProduto()">+ Adicionar à Lista</button>
+  </div>
+
+  <div class="card">
+    <h3>2. Adicionar Preços (No Mercado)</h3>
+    <div id="listaProdutos"></div>
+
+    <div class="resumo">
+      <p style="margin: 5px 0;">Total Gasto: R$ <span id="totalGasto">0.00</span></p>
+      <p style="margin: 5px 0;">Resta: R$ <span id="totalRestante">0.00</span></p>
+    </div>
+
+    <button class="btn-danger" style="margin-top: 15px;" onclick="limparLista()">Limpar Lista Inteira</button>
+  </div>
+
+  <script>
+    let produtos = JSON.parse(localStorage.getItem('produtos')) || [];
+    let limiteGasto = parseFloat(localStorage.getItem('limite')) || 0;
+    let apiKey = localStorage.getItem('geminiKey') || '';
+
+    if (limiteGasto > 0) document.getElementById('limite').value = limiteGasto;
+    if (apiKey) document.getElementById('apiKey').value = apiKey;
+
+    function salvarKey() {
+      apiKey = document.getElementById('apiKey').value.trim();
+      localStorage.setItem('geminiKey', apiKey);
+    }
+
+    async function categorizarComIA(nomeProduto) {
+      if (!apiKey) return "Outros";
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      const prompt = `Classifique o produto "${nomeProduto}" em APENAS UMA destas categorias: Hortifrúti, Açougue, Laticínios, Mercearia, Bebidas, Limpeza, Higiene ou Outros. Responda apenas com a palavra da categoria.`;
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }]
+          })
+        });
+
+        const data = await response.json();
+        const resposta = data.candidates[0].content.parts[0].text.trim();
+        return resposta || "Outros";
+      } catch (error) {
+        console.error("Erro na IA:", error);
+        return "Outros";
+      }
+    }
+
+    async function adicionarProduto() {
+      const nome = document.getElementById('nomeProduto').value.trim();
+      const qtd = parseInt(document.getElementById('qtdProduto').value) || 1;
+      const statusIA = document.getElementById('statusIA');
+      const btn = document.getElementById('btnAdicionar');
+
+      if (nome) {
+        statusIA.style.display = 'block';
+        btn.disabled = true;
+
+        const categoria = await categorizarComIA(nome);
+
+        produtos.push({ nome, qtd, categoria, preco: null, comprado: false });
+        
+        document.getElementById('nomeProduto').value = '';
+        document.getElementById('qtdProduto').value = '1';
+        statusIA.style.display = 'none';
+        btn.disabled = false;
+
+        atualizarTela();
+      }
+    }
+
+    function atualizarTela() {
+      const listaDiv = document.getElementById('listaProdutos');
+      listaDiv.innerHTML = '';
+      
+      let total = 0;
+
+      produtos.forEach((prod, index) => {
+        const subtotal = (prod.preco || 0) * prod.qtd;
+        if (prod.comprado) total += subtotal;
+
+        listaDiv.innerHTML += `
+          <div class="item ${prod.comprado ? 'comprado' : ''}">
+            <div class="item-topo">
+              <strong>${prod.nome} (${prod.qtd}x)</strong>
+              <button class="btn-danger" onclick="removerProduto(${index})" style="width:auto; margin:0; padding: 2px 8px;">X</button>
+            </div>
+            <div class="item-detalhes">[${prod.categoria}] ${prod.comprado ? `- Total: R$ ${subtotal.toFixed(2)}` : '- Pendente'}</div>
+            
+            <div class="item-preco-area">
+              <input type="number" id="preco-${index}" placeholder="Preço Un. (R$)" step="0.01" value="${prod.preco !== null ? prod.preco : ''}">
+              <button onclick="salvarPreco(${index})">${prod.comprado ? 'Atualizar' : 'OK'}</button>
+            </div>
+          </div>
+        `;
+      });
+
+      const limite = parseFloat(document.getElementById('limite').value) || 0;
+      const restante = limite - total;
+
+      const restanteElem = document.getElementById('totalRestante');
+      document.getElementById('totalGasto').innerText = total.toFixed(2);
+      restanteElem.innerText = restante.toFixed(2);
+
+      restanteElem.className = restante < 0 ? 'restante-alerta' : 'restante-ok';
+
+      localStorage.setItem('produtos', JSON.stringify(produtos));
+      localStorage.setItem('limite', limite);
+    }
+
+    function salvarPreco(index) {
+      const inputPreco = document.getElementById(`preco-${index}`).value;
+      const preco = parseFloat(inputPreco);
+
+      if (!isNaN(preco) && preco >= 0) {
+        produtos[index].preco = preco;
+        produtos[index].comprado = true;
+        atualizarTela();
+      }
+    }
+
+    function removerProduto(index) {
+      produtos.splice(index, 1);
+      atualizarTela();
+    }
+
+    function limparLista() {
+      if (confirm("Tem certeza que deseja apagar toda a lista?")) {
+        produtos = [];
+        atualizarTela();
+      }
+    }
+
+    atualizarTela();
+  </script>
+</body>
+</html>
